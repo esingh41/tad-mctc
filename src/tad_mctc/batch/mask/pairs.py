@@ -92,7 +92,9 @@ def real_pairs_maskdiag(numbers: Tensor, mon_A_indices=None, mon_B_indices=None)
         #Get atom pairs between mon A and mon B, double count on purpose cuz they * by 0.5
         AB = maskA.unsqueeze(-2) * maskB.unsqueeze(-1)
         BA = maskB.unsqueeze(-2) * maskA.unsqueeze(-1)
-        mask = AB | BA
+        #mask = AB | BA
+        #Adjusting so not double counting
+        mask = AB
         print("Mask sum per batch:", mask.sum(dim=(-1,-2)))
 
 
