@@ -179,3 +179,4 @@ cython_debug/
 # project-specific ignores
 examples/write/*coord
 examples/write/*.xyz
+*.pkl
