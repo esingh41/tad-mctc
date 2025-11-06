@@ -72,28 +72,29 @@ def real_pairs_maskdiag(numbers: Tensor, mon_A_indices=None, mon_B_indices=None)
     real = real_atoms(numbers)
 
     if mon_A_indices is not None and mon_B_indices is not None:
-        print(f"{numbers= }")
         maskA = torch.zeros_like(real)
         maskB = torch.zeros_like(real)
 
         batch_size = maskA.shape[0]
-        rows = torch.arange(batch_size).unsqueeze(1)
-
-        maskA[rows, mon_A_indices] = True
-        print(f"{maskA= }")
-        maskB[rows, mon_B_indices] = True
+        if maskA.ndim > 1:
+            rows = torch.arange(batch_size).unsqueeze(1)
+            maskA[rows, mon_A_indices] = True
+            maskB[rows, mon_B_indices] = True
+            maskB[rows, 0] = False
+        else:
+            maskA[mon_A_indices] = True
+            maskB[mon_B_indices] = True
         #I am setting maskB zero index to False, because molecule B will never have atom 0 
         #if I use the qcelemental, and then they pad with zeros, so the code is accidentally assigning 
         #atom 0 to A and B
-        maskB[rows, 0] = False
-        print(f"{maskB= }")
 
 
         #Get atom pairs between mon A and mon B, double count on purpose cuz they * by 0.5
         AB = maskA.unsqueeze(-2) * maskB.unsqueeze(-1)
         BA = maskB.unsqueeze(-2) * maskA.unsqueeze(-1)
         #mask = AB | BA
-        #Adjusting so not double counting
+        #Adjusting so not double counting, actually bad idea because other codes deliberately double count, and then correct for that
+        #So if I only return a mask that doesn't double count, then I will get half the dispersion energy.
         mask = AB
         print("Mask sum per batch:", mask.sum(dim=(-1,-2)))
 
