@@ -237,10 +237,13 @@ def cn_d3_apnet(
     #Hmmm, what does a coordination number of 0.74 mean? 3/4s of a bond?
     #Oxygen has the same coordination number with respect to both Hs makes sense
     #cf_A = scatter_sum_compile(cf_A, e_AA_source, 1,)
-    output = torch.zeros_like(cf_A)
-    output.scatter_reduce_(0, e_AA_source, cf_A, reduce="sum", include_self=False)
-    print(output)
-    return
+    cn_A_size = e_AA_source.max().item() + 1
+    cn_A = torch.zeros(cn_A_size, dtype=cf_A.dtype)
+    cn_A.scatter_reduce_(0, e_AA_source, cf_A, reduce="sum", include_self=False)
+    print(f"{cn_A = }")
+    #Makes sense oxygen has two bonding partners, and then hydrogen also has close to two? Weird
+    #cn_A = tensor([2.0000, 1.7440, 1.7440])
+    
     #Computing the coordination numbers for Monomer B
     RB=batch.RB
     e_BB_source = batch.e_BB_source
@@ -251,9 +254,13 @@ def cn_d3_apnet(
         counting_function(dRB, rc_B),
         torch.tensor(0.0, **dd)
     )
-    cf_B = torch.sum(cf_A, dim=-1)
 
-    return cf_A, cf_B
+    cn_B_size = e_BB_source.max().item() + 1
+    cn_B = torch.zeros(cn_B_size, dtype=cf_B.dtype)
+    cn_B.scatter_reduce_(0, e_BB_source, cf_B, reduce="sum", include_self=False)
+    print(f"{cn_B = }")
+    #cn_B = tensor([2.0000, 1.7435, 1.7435])
+    return cn_A, cn_B
 
 def cn_d3_gradient(
     numbers: Tensor,
