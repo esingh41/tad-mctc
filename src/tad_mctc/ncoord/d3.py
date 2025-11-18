@@ -31,6 +31,10 @@ from ..typing import DD, Any, CountingFunction, Tensor
 from . import defaults
 from .count import dexp_count, exp_count
 
+#Needed for summing across the coordination numbers
+from apnet_pt.util import scatter_sum_compile
+
+
 __all__ = ["cn_d3", "cn_d3_gradient"]
 
 
@@ -77,6 +81,7 @@ def cn_d3(
     """
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
 
+    
     if cutoff is None:
         cutoff = torch.tensor(defaults.CUTOFF_D3, **dd)
 
@@ -113,6 +118,142 @@ def cn_d3(
 
     return torch.sum(cf, dim=-1)
 
+#Borrowed from APNET
+def get_distances(RA, RB, e_source, e_target):
+        RA_source = RA.index_select(0, e_source)
+        RB_target = RB.index_select(0, e_target)
+        dR_xyz = RB_target - RA_source
+
+        # Compute distances with safe operation for square root
+        # dR = torch.sqrt(nn.functional.relu(torch.sum(dR_xyz**2, dim=-1)))
+        dR = torch.sqrt(torch.sum(dR_xyz * dR_xyz, dim=-1).clamp_min(1e-10))
+        return dR, dR_xyz
+
+def cn_d3_apnet(
+    batch,
+    *,
+    counting_function: CountingFunction | None = None,
+    rcov: Tensor | None = None,
+    cutoff: Tensor | None = None,
+    **kwargs: Any,
+) -> Tensor:
+    """
+    Compute the D3 fractional coordination (exponential counting function).
+
+    Parameters
+    ----------
+    numbers : Tensor
+        Atomic numbers for all atoms in the system of shape ``(..., nat)``.
+    positions : Tensor
+        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
+    counting_function : CountingFunction, optional
+        Calculate weight for pairs. Defaults to
+        :func:`tad_mctc.ncoord.count.exp_count`.
+    rcov : Tensor | None, optional
+        Covalent radii for each species. Defaults to ``None``.
+    cutoff : Tensor | None, optional
+        Real-space cutoff. Defaults to ``None``.
+    kwargs : dict[str, Any]
+        Pass-through arguments for counting function. For example, ``kcn``,
+        the steepness of the counting function, which defaults to
+        :data:`tad_mctc.ncoord.defaults.KCN_D3`.
+
+    Returns
+    -------
+    Tensor
+        Coordination numbers for all atoms (shape: ``(..., nat)``).
+
+    Raises
+    ------
+    ValueError
+        If shape mismatch between ``numbers``, ``positions`` and
+        ``rcov`` is detected.
+    """
+    RA = batch.RA
+
+    #dictionary of defaults; RA is reference tensor, extracting device and precision
+    #so can be used for other tensors
+    dd: DD = {"device": RA.device, "dtype": RA.dtype}
+
+    #What is this cutoff
+    #I don't really have to care for a cutoff right, 
+    #because I want to use all of the intramonomer edges anyways right?
+
+    if cutoff is None:
+        cutoff = torch.tensor(defaults.CUTOFF_D3, **dd)
+
+    if counting_function is None:
+        counting_function = exp_count
+        
+    ############################################
+    ##Getting the covalent radii for monomer A##
+    ############################################
+    ZA = batch.ZA
+    #ZA =tensor([8, 1, 1])
+    print(f"{ZA =}")
+    rcov_A = radii.COV_D3(**dd)[ZA] 
+    print(f"{rcov_A = }")
+    #rcov_A = tensor([1.5874, 0.8063, 0.8063])
+    e_AA_source = batch.e_AA_source
+    e_AA_target = batch.e_AA_target
+    rc_A = rcov_A.index_select(0, e_AA_source) + rcov_A.index_select(0, e_AA_target)
+    print(f"{rc_A = }")
+    #rc_A = tensor([2.3937, 2.3937, 2.3937, 1.6126, 2.3937, 1.6126])
+    #rc_A contains the covalent radii sums
+
+
+    ############################################
+    ##Getting the covalent radii for monomer B##
+    ############################################
+    ZB = batch.ZB
+    rcov_B = radii.COV_D3(**dd)[ZB] 
+    print(f"{rcov_B = }")
+    #rcov_B = tensor([1.5874, 0.8063, 0.8063])
+    e_BB_source = batch.e_BB_source
+    e_BB_target = batch.e_BB_target
+    rc_B = rcov_B.index_select(0, e_BB_source) + rcov_B.index_select(0, e_BB_target)
+    print(f"{rc_B = }")
+    #rc_B = tensor([2.3937, 2.3937, 2.3937, 1.6126, 2.3937, 1.6126])
+    
+
+
+    ############################################
+    #Getting the coordination #s for monomer A##
+    ############################################
+    RA = batch.RA
+    e_AA_source = batch.e_AA_source
+    e_AA_target = batch.e_AA_target
+    dRA, _ = get_distances(RA, RA, e_AA_source, e_AA_target)
+    print(f"{dRA = }")
+    #dRA = tensor([0.9581, 0.9647, 0.9581, 1.5118, 0.9647, 1.5118]) dRA is 1D, so covalent radii also need to be one D
+    
+    cf_A = torch.where(
+        (dRA <= cutoff),
+        counting_function(dRA, rc_A),
+        torch.tensor(0.0, **dd)
+    )
+    print(f"{cf_A = }")
+    #cf_A = tensor([1.0000, 1.0000, 1.0000, 0.7440, 1.0000, 0.7440])
+    #Hmmm, what does a coordination number of 0.74 mean? 3/4s of a bond?
+    #Oxygen has the same coordination number with respect to both Hs makes sense
+    #cf_A = scatter_sum_compile(cf_A, e_AA_source, 1,)
+    output = torch.zeros_like(cf_A)
+    output.scatter_reduce_(0, e_AA_source, cf_A, reduce="sum", include_self=False)
+    print(output)
+    return
+    #Computing the coordination numbers for Monomer B
+    RB=batch.RB
+    e_BB_source = batch.e_BB_source
+    e_BB_target = batch.e_BB_target
+    dRB, _ = get_distances(RB, RB, e_BB_source, e_BB_target)
+    cf_B = torch.where(
+        (dRB <= cutoff),
+        counting_function(dRB, rc_B),
+        torch.tensor(0.0, **dd)
+    )
+    cf_B = torch.sum(cf_A, dim=-1)
+
+    return cf_A, cf_B
 
 def cn_d3_gradient(
     numbers: Tensor,
